@@ -6,9 +6,9 @@ Validating admission policies offer a declaritive, in-process alternative to val
 - [Validating Admission Policies](#validating-admission-policies)
   - [How to use them](#how-to-use-them)
   - [Example](#example)
-  - [Installation](#installation)
   - [Usage](#usage)
-  - [License](#license)
+  - [Using variables](#using-variables)
+  - [Closing](#closing)
 
 ## How to use them
 
@@ -18,7 +18,7 @@ Policies are made up of three resources:
 
 ## Example
 
-This example shows how to create a policy that only allows the `kubernetes` Service, Endpoint, or EndpointSlice to be created/modified in the `default` namespace. A validation passes (request is allowed) when the expression returns true.
+This example shows how to create a policy that only allows the `kubernetes` Service, Endpoint, or EndpointSlice to be created/modified in the `default` namespace. **A validation passes (request is allowed) when the expression returns true.**
 
 ```yaml
 kubectl apply -f -<<EOF
@@ -85,3 +85,181 @@ Update the Kubernetes Service
 > k label svc/kubernetes color=blue
 service/kubernetes labeled
 ```
+
+## Using variables
+
+We can define variables and use them in validations. For instance, if we do not want to allow pods or containers running below UID 1000, we can use the following policy and define variables for pod security context and containers.
+
+```yaml
+kubectl apply -f -<<EOF
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: "security-contexts.defenseunicorns.com"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   [""]
+      apiVersions: ["v1"]
+      operations:  ["CREATE", "UPDATE"]
+      resources:   ["pods"]
+  variables: # define the variable
+    - name: "podSecurityContext"
+      expression: "object.spec.securityContext"
+  validations:
+    - expression: "has(variables.podSecurityContext.runAsUser) ? variables.podSecurityContext.runAsUser >= 1000 : true"
+      message: "Pod security context must run as user 1000 or higher."
+    - expression: "object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.runAsUser) ? c.securityContext.runAsUser >= 1000 : true)"
+      message: "All containers must run as user 1000 or higher if set."
+    - expression: "has(object.spec.initContainers) ? object.spec.initContainers.all(c, has(c.securityContext) && has(c.securityContext.runAsUser) ? c.securityContext.runAsUser >= 1000 : true) : true"
+      message: "All initContainers must run as user 1000 or higher if set."
+    - expression: "has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers.all(c, has(c.securityContext) && has(c.securityContext.runAsUser) ? c.securityContext.runAsUser >= 1000 : true) : true"
+      message: "All ephemeralContainers must run as user 1000 or higher if set."
+EOF
+```
+
+```yaml
+kubectl apply -f -<<EOF
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: "security-contexts-binding.defenseunicorns.com"
+spec:
+  policyName: "security-contexts.defenseunicorns.com"
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["kube-system"]
+EOF
+```
+
+Create a pod that violates the policy due to  securityContext.
+
+
+```yaml
+kubectl apply -f -<<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: null
+  labels:
+    run: violation
+  name: violation
+  namespace: kube-public
+spec:
+  securityContext:
+    runAsUser: 999
+  containers:
+  - image: nginx
+    name: test
+    resources: {}
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}
+EOF
+
+The pods "violation" is invalid: : ValidatingAdmissionPolicy 'security-contexts.defenseunicorns.com' with binding 'security-contexts-binding.defenseunicorns.com' denied request: Pod security context must run as user 1000 or higher.
+```
+
+This will fail pod security context check as the user is set to 999
+
+```yaml
+This pod will also violate the policy because the container securityContext runAsUser is set to 100, which is below the minimum of 1000.
+```yaml
+kubectl apply -f -<<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: null
+  labels:
+    run: violation
+  name: violation
+  namespace: kube-public
+spec:
+  containers:
+  - image: nginx
+    name: test
+    resources: {}
+    securityContext:
+      runAsUser: 100
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}
+EOF
+
+The pods "violation" is invalid: : ValidatingAdmissionPolicy 'security-contexts.defenseunicorns.com' with binding 'security-contexts-binding.defenseunicorns.com' denied request: All containers must run as user 1000 or higher if set.
+```
+
+Now lets use an init container with a violation
+
+```yaml
+kubectl apply -f -<<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: null
+  labels:
+    run: violation
+  name: violation
+  namespace: kube-public
+spec:
+  initContainers:
+  - image: busybox
+    name: init
+    command: ['sh', '-c', 'sleep 10']
+    resources: {}
+    securityContext:
+      runAsUser: 999
+  containers:
+  - image: nginx
+    name: test
+    resources: {}
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}
+EOF
+
+The pods "violation" is invalid: : ValidatingAdmissionPolicy 'security-contexts.defenseunicorns.com' with binding 'security-contexts-binding.defenseunicorns.com' denied request: All initContainers must run as user 1000 or higher if set.
+```
+
+Now create a pod that passes the expressions
+
+```yaml
+kubectl apply -f -<<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: null
+  labels:
+    run: violation
+  name: violation
+  namespace: kube-public
+spec:
+  initContainers:
+  - image: busybox
+    name: init
+    command: ['sh', '-c', 'sleep 10']
+    resources: {}
+    securityContext:
+      runAsUser: 1000
+  containers:
+  - image: nginx
+    name: test
+    resources: {}
+    securityContext:
+      runAsUser: 1000
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}
+EOF
+```
+
+## Closing
+
+It is a powerful tool that can be used to enforce policies and ensure compliance in your Kubernetes cluster. However, it is important to understand the implications of using it and to test your policies thoroughly before deploying them in a production environment. This is a good solution for single policies but for complex logic around Admission Events you still are going to need an operator.
+
+[Docs](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/)
