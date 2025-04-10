@@ -167,8 +167,7 @@ The pods "violation" is invalid: : ValidatingAdmissionPolicy 'security-contexts.
 
 This will fail pod security context check as the user is set to 999
 
-```yaml
-This pod will also violate the policy because the container securityContext runAsUser is set to 100, which is below the minimum of 1000.
+
 ```yaml
 kubectl apply -f -<<EOF
 apiVersion: v1
@@ -262,4 +261,5 @@ EOF
 
 It is a powerful tool that can be used to enforce policies and ensure compliance in your Kubernetes cluster. However, it is important to understand the implications of using it and to test your policies thoroughly before deploying them in a production environment. This is a good solution for single policies but for complex logic around Admission Events you still are going to need an operator.
 
-[Docs](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/)
+- [Docs](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/)
+- [CEL Playground](https://playcel.undistro.io/)
