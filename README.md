@@ -18,7 +18,7 @@ Policies are made up of three resources:
 
 ## Example
 
-This example shows how to create a policy that only allows the `kubernetes` Service, Endpoint, or EndpointSlice to be created/modified in the `default` namespace.
+This example shows how to create a policy that only allows the `kubernetes` Service, Endpoint, or EndpointSlice to be created/modified in the `default` namespace. A validation passes (request is allowed) when the expression returns true.
 
 ```yaml
 kubectl apply -f -<<EOF
